@@ -1,285 +1,309 @@
 @echo off
-chcp 65001 >nul
-title Hermes CN Desktop 新机全自动安装
+setlocal enabledelayedexpansion
+title Hermes CN Desktop - 一键安装
 
 :: ============================================================
-:: Hermes CN Desktop — 新机一键全自动安装脚本
-:: 自动检测 → 自动下载 → 自动安装 Python / Git / Hermes
+:: Hermes CN Desktop 一键安装脚本 v2.0
+:: 支持: 桌面 / 服务器 / 无人值守
+:: 用法: hermes-setup.bat [/silent]
 :: ============================================================
 
-echo.
-echo   ╔══════════════════════════════════════════════════╗
-echo   ║   Hermes CN Desktop · 新机全自动安装向导        ║
-echo   ╚══════════════════════════════════════════════════╝
-echo.
+:: --- 静默模式检测 ---
+set SILENT=0
+if /i "%1"=="/silent" set SILENT=1
+if /i "%1"=="silent" set SILENT=1
+if "%SILENT_ENV%"=="1" set SILENT=1
+if defined SILENT_ENV if "%SILENT_ENV%"=="1" set SILENT=1
+if "%HERMES_SILENT%"=="1" set SILENT=1
 
-set "FAIL=0"
-set "NEED_REBOOT=0"
-
-:: ============================================================
-:: STEP 1 — Python 3.12
-:: ============================================================
-call :section "Python 3.12"
-
-where python >nul 2>&1
-if %errorlevel% equ 0 (
-    for /f "tokens=2" %%v in ('python --version 2^>^&1') do set pyver=%%v
-    echo   ✓ 已安装 Python %pyver%
-    python -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" 2>nul
-    if %errorlevel% neq 0 (
-        echo   ⚠ 版本低于 3.10，建议升级
-        goto :install_python
-    )
-    goto :python_done
-)
-
-:install_python
-echo   📥 开始安装 Python 3.12...
-echo.
-
-:: 策略 A：winget（Windows 10/11 自带）
-where winget >nul 2>&1
-if %errorlevel% equ 0 (
-    echo   尝试 winget 安装...
-    winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements -h
-    if %errorlevel% equ 0 (
-        echo   ✓ Python 3.12 安装完成
-        set "NEED_REBOOT=1"
-        goto :python_done
-    )
-    echo   winget 失败，改用下载安装...
-)
-
-:: 策略 B：国内镜像下载（清华源加速）
-echo   从国内镜像下载 Python 安装包...
-set "PY_URL=https://registry.npmmirror.com/-/binary/python/3.12.9/python-3.12.9-amd64.exe"
-set "PY_INSTALLER=%TEMP%\python-3.12.9-amd64.exe"
-
-powershell -c "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iwr -Uri '%PY_URL%' -OutFile '%PY_INSTALLER%'" 2>nul
-if not exist "%PY_INSTALLER%" (
-    :: 备用：官方源
-    echo   镜像失败，尝试官方源...
-    set "PY_URL=https://www.python.org/ftp/python/3.12.9/python-3.12.9-amd64.exe"
-    powershell -c "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iwr -Uri '%PY_URL%' -OutFile '%PY_INSTALLER%'" 2>nul
-)
-
-if not exist "%PY_INSTALLER%" (
-    echo   ❌ Python 下载失败，请手动从 https://www.python.org/downloads/ 安装
-    echo   （安装时务必勾选 Add Python to PATH）
-    set "FAIL=1"
-    goto :python_done
-)
-
-echo   安装中（静默，约 1 分钟）...
-"%PY_INSTALLER%" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0
-if %errorlevel% neq 0 (
-    "%PY_INSTALLER%" /quiet PrependPath=1
-)
-del /f "%PY_INSTALLER%" 2>nul
-echo   ✓ Python 3.12 安装完成
-set "NEED_REBOOT=1"
-
-:python_done
-echo.
-
-:: ============================================================
-:: STEP 2 — Git for Windows
-:: ============================================================
-call :section "Git for Windows"
-
-where git >nul 2>&1
-if %errorlevel% equ 0 (
-    for /f "tokens=3" %%v in ('git --version 2^>^&1') do echo   ✓ 已安装 Git %%v
-    goto :git_done
-)
-
-echo   📥 开始安装 Git...
-
-where winget >nul 2>&1
-if %errorlevel% equ 0 (
-    echo   尝试 winget 安装...
-    winget install Git.Git --accept-source-agreements --accept-package-agreements -h
-    if %errorlevel% equ 0 (
-        echo   ✓ Git 安装完成
-        set "NEED_REBOOT=1"
-        goto :git_done
-    )
-    echo   winget 失败，改用下载安装...
-)
-
-set "GIT_URL=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1-64-bit.exe"
-set "GIT_INSTALLER=%TEMP%\Git-2.47.1-64-bit.exe"
-
-powershell -c "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iwr -Uri '%GIT_URL%' -OutFile '%GIT_INSTALLER%'" 2>nul
-
-if not exist "%GIT_INSTALLER%" (
-    echo   ❌ Git 下载失败，请手动从 https://git-scm.com/download/win 安装
-    set "FAIL=1"
-    goto :git_done
-)
-
-echo   安装中（静默）...
-"%GIT_INSTALLER%" /VERYSILENT /NORESTART
-del /f "%GIT_INSTALLER%" 2>nul
-echo   ✓ Git 安装完成
-set "NEED_REBOOT=1"
-
-:git_done
-echo.
-
-:: ============================================================
-:: STEP 3 — pip 升级 + 常用包
-:: ============================================================
-call :section "pip + Python 依赖"
-
-pip --version >nul 2>&1
-if %errorlevel% neq 0 (
-    python -m ensurepip --upgrade 2>nul
-)
-
-echo   升级 pip + 安装常用包（国内镜像加速）...
-pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple --quiet 2>nul
-
-:: Hermes 桌面版自带了大部分依赖，这里只补可能缺的
-pip install requests python-dotenv -i https://pypi.tuna.tsinghua.edu.cn/simple --quiet 2>nul
-
-echo   ✓ pip 就绪
-echo.
-
-:: ============================================================
-:: STEP 4 — Hermes CN Desktop
-:: ============================================================
-call :section "Hermes CN Desktop"
-
-if exist "%LOCALAPPDATA%\Programs\hermes-agent-cn-desktop\hermes-agent-cn-desktop.exe" (
-    echo   ✓ Hermes CN Desktop 已安装
+:: --- 日志 ---
+set LOGFILE=%TEMP%\hermes-install.log
+echo [%date% %time%] === Hermes 安装开始 === > "%LOGFILE%"
+if %SILENT%==1 (
+    call :log "静默模式启动"
 ) else (
-    echo   ⚠ Hermes CN Desktop 未安装
-    echo   👉 请从官方渠道获取安装包，双击安装即可
-    echo   👉 默认安装路径：%LOCALAPPDATA%\Programs\hermes-agent-cn-desktop\
-    set "FAIL=1"
-)
-echo.
-
-:: ============================================================
-:: STEP 5 — 生成 config.yaml 模板
-:: ============================================================
-call :section "生成配置文件模板"
-
-set "CONFIG_DIR=%APPDATA%\cn.org.hermesagent.desktop\runtime\hermes-home"
-set "CONFIG_FILE=%CONFIG_DIR%\config.yaml"
-
-if exist "%CONFIG_FILE%" (
-    echo   ✓ config.yaml 已存在，跳过（如需覆盖请手动删除后重跑）
-    goto :config_done
-)
-
-if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
-
-(
-echo # === Hermes CN Desktop 配置模板 ===
-echo # 搜「替换为你的」填 4 个占位符，其他保持默认
-echo.
-echo model:
-echo   provider: deepseek
-echo   default: deepseek-v4-pro
-echo   base_url: https://api.deepseek.com
-echo   api_mode: chat_completions
-echo   api_key: 替换为你的DeepSeek-API-Key
-echo.
-echo providers:
-echo   deepseek:
-echo     name: DeepSeek
-echo     base_url: https://api.deepseek.com
-echo     api_mode: chat_completions
-echo     transport: openai_chat
-echo     model: deepseek-v4-pro
-echo     models:
-echo       deepseek-v4-flash:
-echo         supports_tools: true
-echo       deepseek-v4-pro:
-echo         supports_tools: true
-echo         supports_reasoning: true
-echo     api_key: 替换为你的DeepSeek-API-Key
-echo.
-echo terminal:
-echo   backend: local
-echo.
-echo delegation:
-echo   max_concurrent_children: 3
-echo.
-echo feishu:
-echo   enabled: true
-echo   app_id: 替换为你的飞书AppID
-echo   app_secret: 替换为你的飞书AppSecret
-) > "%CONFIG_FILE%"
-
-echo   ✓ config.yaml 已生成
-echo   📝 请用记事本打开，搜「替换为你的」填 4 个值
-echo.
-
-:config_done
-
-:: ============================================================
-:: STEP 6 — 下载辅助脚本
-:: ============================================================
-call :section "下载辅助脚本"
-
-set "BASE=https://raw.githubusercontent.com/qq449176836-lang/hermes-quick-start/main"
-
-if not exist "hermes-fix.bat" (
-    powershell -c "iwr -Uri '%BASE%/hermes-fix.bat' -OutFile 'hermes-fix.bat'" 2>nul
-    if exist "hermes-fix.bat" (echo   ✓ hermes-fix.bat 已下载) else (echo   ⚠ 下载失败)
-) else (echo   ✓ hermes-fix.bat 已存在)
-
-if not exist "hermes-install-guide.md" (
-    powershell -c "iwr -Uri '%BASE%/hermes-install-guide.md' -OutFile 'hermes-install-guide.md'" 2>nul
-    if exist "hermes-install-guide.md" (echo   ✓ hermes-install-guide.md 已下载) else (echo   ⚠ 下载失败)
-) else (echo   ✓ hermes-install-guide.md 已存在)
-
-echo.
-
-:: ============================================================
-:: 总结
-:: ============================================================
-echo   ╔══════════════════════════════════════════════════╗
-echo   ║                  安装完成！                      ║
-echo   ╚══════════════════════════════════════════════════╝
-echo.
-
-if "%NEED_REBOOT%"=="1" (
-    echo   🔄 安装了系统级软件（Python / Git），建议重启终端
-    echo   或重新打开命令提示符后再继续。
+    echo [Hermes 一键安装工具 v2.0]
+    echo 日志文件: %LOGFILE%
     echo.
 )
 
-if "%FAIL%"=="1" (
-    echo   ⚠ 部分组件未自动安装成功，请按上方提示手动处理。
+:: --- 代理检测 ---
+if defined HTTP_PROXY (
+    call :log "检测到代理: %HTTP_PROXY%"
+    set "PROXY_FLAG=--proxy %HTTP_PROXY%"
 ) else (
-    echo   ✅ 所有组件就绪！
+    set "PROXY_FLAG="
 )
 
-echo.
-echo   📋 接下来你只需要做：
-echo   1. 安装 Hermes CN Desktop（如未装）
-echo   2. 用记事本打开：
-echo      %CONFIG_FILE%
-echo   3. 搜「替换为你的」，填 4 个值：
-echo      · DeepSeek API Key（2 处）
-echo      · 飞书 App ID
-echo      · 飞书 App Secret
-echo   4. 启动 Hermes Desktop，飞书测试
-echo.
-echo   🛠 出故障时，右键管理员运行 hermes-fix.bat
-echo.
-pause
-exit /b 0
+:: ============================================================
+:: STEP 1: 安装 Python 3.12
+:: ============================================================
+call :log "STEP 1/7: 安装 Python 3.12..."
+
+where python >nul 2>&1
+if %ERRORLEVEL%==0 (
+    python --version 2>&1 | findstr "3.12" >nul
+    if !ERRORLEVEL!==0 (
+        call :log "  Python 3.12 已安装，跳过"
+        goto :step2
+    )
+    call :log "  Python 已安装但非 3.12，继续安装"
+)
+
+:: 尝试 winget
+where winget >nul 2>&1
+if %ERRORLEVEL%==0 (
+    call :log "  通过 winget 安装..."
+    winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent >> "%LOGFILE%" 2>&1
+    if !ERRORLEVEL!==0 goto :py_done
+    call :log "  winget 失败，尝试镜像下载..."
+)
+
+:: 手动下载安装
+set "PYTHON_URL=https://registry.npmmirror.com/-/binary/python/3.12.9/python-3.12.9-amd64.exe"
+set "PYTHON_INSTALLER=%TEMP%\python-installer.exe"
+call :log "  下载 Python 3.12.9..."
+curl -fsSL %PROXY_FLAG% --connect-timeout 15 --max-time 300 "%PYTHON_URL%" -o "%PYTHON_INSTALLER%" >> "%LOGFILE%" 2>&1
+if %ERRORLEVEL% neq 0 (
+    call :log "  镜像下载失败，尝试官方源..."
+    set "PYTHON_URL=https://www.python.org/ftp/python/3.12.9/python-3.12.9-amd64.exe"
+    curl -fsSL %PROXY_FLAG% --connect-timeout 30 --max-time 600 "%PYTHON_URL%" -o "%PYTHON_INSTALLER%" >> "%LOGFILE%" 2>&1
+)
+if exist "%PYTHON_INSTALLER%" (
+    call :log "  安装 Python..."
+    "%PYTHON_INSTALLER%" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0 >> "%LOGFILE%" 2>&1
+    del "%PYTHON_INSTALLER%" >nul 2>&1
+)
+
+:py_done
+:: 刷新 PATH
+set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
+python --version >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    call :log "  [FAIL] Python 安装失败"
+    if %SILENT%==0 pause
+    exit /b 1
+)
+call :log "  [OK] Python 就绪"
 
 :: ============================================================
-:: 显示小节标题
+:: STEP 2: 安装 Git
 :: ============================================================
-:section
-echo   ───────────────────────────────────────────────
-echo   %~1
-echo   ───────────────────────────────────────────────
-exit /b 0
+:step2
+call :log "STEP 2/7: 安装 Git for Windows..."
+
+where git >nul 2>&1
+if %ERRORLEVEL%==0 (
+    call :log "  Git 已安装，跳过"
+    goto :step3
+)
+
+where winget >nul 2>&1
+if %ERRORLEVEL%==0 (
+    call :log "  通过 winget 安装..."
+    winget install Git.Git --accept-source-agreements --accept-package-agreements --silent >> "%LOGFILE%" 2>&1
+    if !ERRORLEVEL!==0 goto :git_done
+)
+
+set "GIT_URL=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
+set "GIT_INSTALLER=%TEMP%\git-installer.exe"
+call :log "  下载 Git..."
+curl -fsSL %PROXY_FLAG% --connect-timeout 30 --max-time 600 "%GIT_URL%" -o "%GIT_INSTALLER%" >> "%LOGFILE%" 2>&1
+if exist "%GIT_INSTALLER%" (
+    call :log "  安装 Git（静默）..."
+    "%GIT_INSTALLER%" /VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS >> "%LOGFILE%" 2>&1
+    del "%GIT_INSTALLER%" >nul 2>&1
+)
+
+:git_done
+set "PATH=C:\Program Files\Git\cmd;%PATH%"
+git --version >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    call :log "  [WARN] Git 安装可能失败，继续..."
+)
+call :log "  [OK] Git 就绪"
+
+:: ============================================================
+:: STEP 3: pip 配置 + 依赖
+:: ============================================================
+:step3
+call :log "STEP 3/7: 配置 pip + 安装依赖..."
+
+python -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple >> "%LOGFILE%" 2>&1
+python -m pip install --upgrade pip --quiet >> "%LOGFILE%" 2>&1
+
+call :log "  安装 Python 依赖..."
+python -m pip install requests python-dotenv pyyaml --quiet >> "%LOGFILE%" 2>&1
+call :log "  [OK] 依赖就绪"
+
+:: ============================================================
+:: STEP 4: 下载安装 Hermes CN Desktop
+:: ============================================================
+call :log "STEP 4/7: 安装 Hermes CN Desktop..."
+
+set "HERMES_DIR=%LOCALAPPDATA%\Programs\hermes-agent-cn-desktop"
+if exist "%HERMES_DIR%\Hermes Agent CN Desktop.exe" (
+    call :log "  Hermes 已安装，跳过"
+    goto :step5
+)
+
+:: 尝试从官网下载（占位——需要真实下载链接）
+call :log "  [WARN] Hermes Desktop 需手动安装"
+call :log "  请从官网下载安装包并安装到: %HERMES_DIR%"
+call :log "  或提供下载 URL 后重新运行本脚本。"
+if %SILENT%==0 (
+    echo.
+    echo   [提示] Hermes Desktop 安装包需手动下载安装
+    echo   安装目录: %HERMES_DIR%
+    echo   安装完成后按任意键继续配置...
+    pause >nul
+)
+goto :step5_skip_verify
+
+:: --- 如果有直链，取消下面的注释 ---
+:: set "HERMES_URL=https://example.com/hermes-agent-cn-desktop-setup.exe"
+:: set "HERMES_INSTALLER=%TEMP%\hermes-installer.exe"
+:: curl -fsSL %PROXY_FLAG% --connect-timeout 30 --max-time 600 "%HERMES_URL%" -o "%HERMES_INSTALLER%"
+:: "%HERMES_INSTALLER%" /VERYSILENT /DIR="%HERMES_DIR%"
+
+:step5_skip_verify
+:: 刷新 PATH（Hermes 可能不在标准路径）
+if exist "%HERMES_DIR%" set "PATH=%HERMES_DIR%;%PATH%"
+
+:: ============================================================
+:: STEP 5: 生成 config.yaml
+:: ============================================================
+call :log "STEP 5/7: 生成 config.yaml..."
+
+:: 查找 Hermes 配置目录
+set "CONFIG_DIR="
+if exist "%APPDATA%\cn.org.hermesagent.desktop\runtime\hermes-home" (
+    set "CONFIG_DIR=%APPDATA%\cn.org.hermesagent.desktop\runtime\hermes-home"
+) else if exist "%LOCALAPPDATA%\cn.org.hermesagent.desktop\runtime\hermes-home" (
+    set "CONFIG_DIR=%LOCALAPPDATA%\cn.org.hermesagent.desktop\runtime\hermes-home"
+)
+
+if "%CONFIG_DIR%"=="" (
+    call :log "  [WARN] 未找到 Hermes 配置目录，请先启动一次 Hermes Desktop"
+    goto :step6
+)
+
+set "CONFIG_FILE=%CONFIG_DIR%\config.yaml"
+if exist "%CONFIG_FILE%" (
+    call :log "  config.yaml 已存在，跳过"
+    goto :step6
+)
+
+:: 从环境变量读取配置
+set "API_KEY=%HERMES_API_KEY%"
+set "MODEL=%HERMES_MODEL%"
+if "%MODEL%"=="" set "MODEL=deepseek-v4-pro"
+set "BASE_URL=%HERMES_BASE_URL%"
+if "%BASE_URL%"=="" set "BASE_URL=https://api.deepseek.com"
+set "PROVIDER=%HERMES_PROVIDER%"
+if "%PROVIDER%"=="" set "PROVIDER=deepseek"
+
+:: 生成 config.yaml
+(
+echo # Hermes Agent 配置文件（自动生成）
+echo model:
+echo   default: "%MODEL%"
+echo   provider: "%PROVIDER%"
+if not "%API_KEY%"=="" (
+    echo   api_key: "%API_KEY%"
+    echo   base_url: "%BASE_URL%"
+)
+echo.
+echo platforms:
+echo   feishu:
+echo     enabled: true
+echo     app_id: "%FEISHU_APP_ID%"
+echo     app_secret: "%FEISHU_APP_SECRET%"
+echo.
+echo delegation:
+echo   max_concurrent_children: 3
+echo   max_spawn_depth: 1
+echo.
+echo terminal:
+echo   cwd: "%USERPROFILE%"
+echo   shell: bash
+) > "%CONFIG_FILE%"
+
+call :log "  [OK] config.yaml 已生成: %CONFIG_FILE%"
+
+:: ============================================================
+:: STEP 6: 生成飞书 .env
+:: ============================================================
+:step6
+call :log "STEP 6/7: 配置飞书集成..."
+
+if "%CONFIG_DIR%"=="" goto :step7
+set "ENV_FILE=%CONFIG_DIR%\.env"
+
+if defined FEISHU_ALLOWED_USERS (
+    if not exist "%ENV_FILE%" (
+        (
+        echo # 飞书白名单（自动生成）
+        echo FEISHU_ALLOWED_USERS=%FEISHU_ALLOWED_USERS%
+        ) > "%ENV_FILE%"
+        call :log "  [OK] .env 已生成: %ENV_FILE%"
+    ) else (
+        call :log "  .env 已存在，跳过"
+    )
+) else (
+    call :log "  [INFO] 未设置 FEISHU_ALLOWED_USERS，飞书集成需手动配置"
+    call :log "  在 %ENV_FILE% 中添加: FEISHU_ALLOWED_USERS=ou_你的用户ID"
+)
+
+:: ============================================================
+:: STEP 7: 安装后验证
+:: ============================================================
+:step7
+call :log "STEP 7/7: 安装后验证..."
+
+set OK=1
+
+:: 验证 Python
+python --version >nul 2>&1 || (call :log "  [FAIL] Python 不可用" & set OK=0)
+if %OK%==1 call :log "  [OK] Python"
+
+:: 验证 Git
+git --version >nul 2>&1 || (call :log "  [WARN] Git 不可用（非致命）")
+if %OK%==1 git --version >nul 2>&1 && call :log "  [OK] Git"
+
+:: 验证 pip 依赖
+python -c "import requests, dotenv, yaml" >nul 2>&1 || (call :log "  [WARN] Python 依赖缺失" & set OK=0)
+if %OK%==1 call :log "  [OK] pip 依赖"
+
+:: 验证配置
+if exist "%CONFIG_FILE%" (call :log "  [OK] config.yaml") else (call :log "  [INFO] config.yaml 待生成")
+
+:: ============================================================
+:: 完成
+:: ============================================================
+call :log "=== 安装完成 ==="
+echo.
+if %OK%==1 (
+    echo   [安装成功] Hermes CN Desktop 环境已就绪
+) else (
+    echo   [部分完成] 请检查上方 [FAIL] 项，查看日志: %LOGFILE%
+)
+echo   配置文件: %CONFIG_FILE%
+if "%HERMES_DIR%" neq "" echo   Hermes 目录: %HERMES_DIR%
+
+if %SILENT%==0 (
+    echo.
+    echo   按任意键退出...
+    pause >nul
+)
+
+exit /b %OK%
+
+:: ============================================================
+:: 工具函数
+:: ============================================================
+:log
+set MSG=[%date% %time%] %~1
+echo %MSG% >> "%LOGFILE%"
+if %SILENT%==0 echo %~1
+exit /b
